@@ -27,7 +27,7 @@ use sc_client_api::{
 	blockchain::{
 		BlockStatus, Cache as BlockchainCache, Info as BlockchainInfo,
 	},
-	Storage
+	Storage, ChtRootStorage,
 };
 use sp_blockchain::{
 	CachedHeaderMetadata, HeaderMetadata, HeaderMetadataCache,
@@ -200,7 +200,7 @@ impl<Block: BlockT> HeaderMetadata<Block> for LightStorage<Block> {
 					header_metadata.clone(),
 				);
 				header_metadata
-			}).ok_or(ClientError::UnknownBlock(format!("header not found in db: {}", hash)))
+			}).ok_or_else(|| ClientError::UnknownBlock(format!("header not found in db: {}", hash)))
 		}, Ok)
 	}
 
@@ -402,7 +402,8 @@ impl<Block> AuxStore for LightStorage<Block>
 		for k in delete {
 			transaction.remove(columns::AUX, k);
 		}
-		self.db.commit(transaction);
+		self.db.commit(transaction)?;
+
 		Ok(())
 	}
 
@@ -495,7 +496,7 @@ impl<Block> Storage<Block> for LightStorage<Block>
 
 			debug!("Light DB Commit {:?} ({})", hash, number);
 
-			self.db.commit(transaction);
+			self.db.commit(transaction)?;
 			cache.commit(cache_ops)
 				.expect("only fails if cache with given name isn't loaded yet;\
 						cache is already loaded because there are cache_ops; qed");
@@ -513,28 +514,13 @@ impl<Block> Storage<Block> for LightStorage<Block>
 
 			let mut transaction = Transaction::new();
 			self.set_head_with_transaction(&mut transaction, hash.clone(), (number.clone(), hash.clone()))?;
-			self.db.commit(transaction);
+			self.db.commit(transaction)?;
 			self.update_meta(hash, header.number().clone(), true, false);
+
 			Ok(())
 		} else {
 			Err(ClientError::UnknownBlock(format!("Cannot set head {:?}", id)))
 		}
-	}
-
-	fn header_cht_root(
-		&self,
-		cht_size: NumberFor<Block>,
-		block: NumberFor<Block>,
-	) -> ClientResult<Option<Block::Hash>> {
-		self.read_cht_root(HEADER_CHT_PREFIX, cht_size, block)
-	}
-
-	fn changes_trie_cht_root(
-		&self,
-		cht_size: NumberFor<Block>,
-		block: NumberFor<Block>,
-	) -> ClientResult<Option<Block::Hash>> {
-		self.read_cht_root(CHANGES_TRIE_CHT_PREFIX, cht_size, block)
 	}
 
 	fn finalize_header(&self, id: BlockId<Block>) -> ClientResult<()> {
@@ -552,7 +538,7 @@ impl<Block> Storage<Block> for LightStorage<Block>
 					)?
 					.into_ops();
 
-				self.db.commit(transaction);
+				self.db.commit(transaction)?;
 				cache.commit(cache_ops)
 					.expect("only fails if cache with given name isn't loaded yet;\
 							cache is already loaded because there are cache_ops; qed");
@@ -607,6 +593,26 @@ impl<Block> Storage<Block> for LightStorage<Block>
 	#[cfg(target_os = "unknown")]
 	fn usage_info(&self) -> Option<UsageInfo> {
 		None
+	}
+}
+
+impl<Block> ChtRootStorage<Block> for LightStorage<Block>
+	where Block: BlockT,
+{
+	fn header_cht_root(
+		&self,
+		cht_size: NumberFor<Block>,
+		block: NumberFor<Block>,
+	) -> ClientResult<Option<Block::Hash>> {
+		self.read_cht_root(HEADER_CHT_PREFIX, cht_size, block)
+	}
+
+	fn changes_trie_cht_root(
+		&self,
+		cht_size: NumberFor<Block>,
+		block: NumberFor<Block>,
+	) -> ClientResult<Option<Block::Hash>> {
+		self.read_cht_root(CHANGES_TRIE_CHT_PREFIX, cht_size, block)
 	}
 }
 
