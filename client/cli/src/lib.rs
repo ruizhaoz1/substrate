@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2022 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -20,6 +20,7 @@
 
 #![warn(missing_docs)]
 #![warn(unused_extern_crates)]
+#![warn(unused_imports)]
 
 pub mod arg_enums;
 mod commands;
@@ -29,23 +30,17 @@ mod params;
 mod runner;
 
 pub use arg_enums::*;
+pub use clap;
+use clap::{AppSettings, FromArgMatches, IntoApp, Parser};
 pub use commands::*;
 pub use config::*;
 pub use error::*;
-use lazy_static::lazy_static;
-use log::info;
 pub use params::*;
-use regex::Regex;
 pub use runner::*;
-use sc_service::{Configuration, TaskExecutor};
+use sc_service::Configuration;
 pub use sc_service::{ChainSpec, Role};
+pub use sc_tracing::logging::LoggerBuilder;
 pub use sp_version::RuntimeVersion;
-use std::io::Write;
-pub use structopt;
-use structopt::{
-	clap::{self, AppSettings},
-	StructOpt,
-};
 
 /// Substrate client CLI
 ///
@@ -70,7 +65,8 @@ pub trait SubstrateCli: Sized {
 	/// Extracts the file name from `std::env::current_exe()`.
 	/// Resorts to the env var `CARGO_PKG_NAME` in case of Error.
 	fn executable_name() -> String {
-		std::env::current_exe().ok()
+		std::env::current_exe()
+			.ok()
 			.and_then(|e| e.file_name().map(|s| s.to_os_string()))
 			.and_then(|w| w.into_string().ok())
 			.unwrap_or_else(|| env!("CARGO_PKG_NAME").into())
@@ -92,8 +88,9 @@ pub trait SubstrateCli: Sized {
 	fn load_spec(&self, id: &str) -> std::result::Result<Box<dyn ChainSpec>, String>;
 
 	/// Helper function used to parse the command line arguments. This is the equivalent of
-	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the name of
-	/// the application, author, "about" and version. It will also set `AppSettings::GlobalVersion`.
+	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the
+	/// name of the application, author, "about" and version. It will also set
+	/// `AppSettings::GlobalVersion`.
 	///
 	/// To allow running the node without subcommand, tt also sets a few more settings:
 	/// `AppSettings::ArgsNegateSubcommands` and `AppSettings::SubcommandsNegateReqs`.
@@ -102,14 +99,15 @@ pub trait SubstrateCli: Sized {
 	/// error message and quit the program in case of failure.
 	fn from_args() -> Self
 	where
-		Self: StructOpt + Sized,
+		Self: Parser + Sized,
 	{
 		<Self as SubstrateCli>::from_iter(&mut std::env::args_os())
 	}
 
 	/// Helper function used to parse the command line arguments. This is the equivalent of
-	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the name of
-	/// the application, author, "about" and version. It will also set `AppSettings::GlobalVersion`.
+	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the
+	/// name of the application, author, "about" and version. It will also set
+	/// `AppSettings::GlobalVersion`.
 	///
 	/// To allow running the node without subcommand, it also sets a few more settings:
 	/// `AppSettings::ArgsNegateSubcommands` and `AppSettings::SubcommandsNegateReqs`.
@@ -118,11 +116,11 @@ pub trait SubstrateCli: Sized {
 	/// Print the error message and quit the program in case of failure.
 	fn from_iter<I>(iter: I) -> Self
 	where
-		Self: StructOpt + Sized,
+		Self: Parser + Sized,
 		I: IntoIterator,
 		I::Item: Into<std::ffi::OsString> + Clone,
 	{
-		let app = <Self as StructOpt>::clap();
+		let app = <Self as IntoApp>::into_app();
 
 		let mut full_version = Self::impl_version();
 		full_version.push_str("\n");
@@ -135,38 +133,21 @@ pub trait SubstrateCli: Sized {
 			.author(author.as_str())
 			.about(about.as_str())
 			.version(full_version.as_str())
-			.settings(&[
-				AppSettings::GlobalVersion,
-				AppSettings::ArgsNegateSubcommands,
-				AppSettings::SubcommandsNegateReqs,
-			]);
+			.setting(
+				AppSettings::PropagateVersion |
+					AppSettings::ArgsNegateSubcommands |
+					AppSettings::SubcommandsNegateReqs,
+			);
 
-		let matches = match app.get_matches_from_safe(iter) {
-			Ok(matches) => matches,
-			Err(mut e) => {
-				// To support pipes, we can not use `writeln!` as any error
-				// results in a "broken pipe" error.
-				//
-				// Instead we write directly to `stdout` and ignore any error
-				// as we exit afterwards anyway.
-				e.message.extend("\n".chars());
+		let matches = app.try_get_matches_from(iter).unwrap_or_else(|e| e.exit());
 
-				if e.use_stderr() {
-					let _ = std::io::stderr().write_all(e.message.as_bytes());
-					std::process::exit(1);
-				} else {
-					let _ = std::io::stdout().write_all(e.message.as_bytes());
-					std::process::exit(0);
-				}
-			},
-		};
-
-		<Self as StructOpt>::from_clap(&matches)
+		<Self as FromArgMatches>::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 	}
 
 	/// Helper function used to parse the command line arguments. This is the equivalent of
-	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the name of
-	/// the application, author, "about" and version. It will also set `AppSettings::GlobalVersion`.
+	/// `structopt`'s `from_iter()` except that it takes a `VersionInfo` argument to provide the
+	/// name of the application, author, "about" and version. It will also set
+	/// `AppSettings::GlobalVersion`.
 	///
 	/// To allow running the node without subcommand, it also sets a few more settings:
 	/// `AppSettings::ArgsNegateSubcommands` and `AppSettings::SubcommandsNegateReqs`.
@@ -176,15 +157,15 @@ pub trait SubstrateCli: Sized {
 	///
 	/// **NOTE:** This method WILL NOT exit when `--help` or `--version` (or short versions) are
 	/// used. It will return a [`clap::Error`], where the [`clap::Error::kind`] is a
-	/// [`clap::ErrorKind::HelpDisplayed`] or [`clap::ErrorKind::VersionDisplayed`] respectively.
+	/// [`clap::ErrorKind::DisplayHelp`] or [`clap::ErrorKind::DisplayVersion`] respectively.
 	/// You must call [`clap::Error::exit`] or perform a [`std::process::exit`].
 	fn try_from_iter<I>(iter: I) -> clap::Result<Self>
 	where
-		Self: StructOpt + Sized,
+		Self: Parser + Sized,
 		I: IntoIterator,
 		I::Item: Into<std::ffi::OsString> + Clone,
 	{
-		let app = <Self as StructOpt>::clap();
+		let app = <Self as IntoApp>::into_app();
 
 		let mut full_version = Self::impl_version();
 		full_version.push_str("\n");
@@ -198,9 +179,9 @@ pub trait SubstrateCli: Sized {
 			.about(about.as_str())
 			.version(full_version.as_str());
 
-		let matches = app.get_matches_from_safe(iter)?;
+		let matches = app.try_get_matches_from(iter)?;
 
-		Ok(<Self as StructOpt>::from_clap(&matches))
+		<Self as FromArgMatches>::from_arg_matches(&matches)
 	}
 
 	/// Returns the client ID: `{impl_name}/v{impl_version}`
@@ -212,95 +193,54 @@ pub trait SubstrateCli: Sized {
 	fn create_configuration<T: CliConfiguration<DVC>, DVC: DefaultConfigurationValues>(
 		&self,
 		command: &T,
-		task_executor: TaskExecutor,
+		tokio_handle: tokio::runtime::Handle,
 	) -> error::Result<Configuration> {
-		command.create_configuration(self, task_executor)
+		command.create_configuration(self, tokio_handle)
 	}
 
 	/// Create a runner for the command provided in argument. This will create a Configuration and
 	/// a tokio runtime
 	fn create_runner<T: CliConfiguration>(&self, command: &T) -> error::Result<Runner<Self>> {
-		command.init::<Self>()?;
-		Runner::new(self, command)
+		let tokio_runtime = build_runtime()?;
+		let config = command.create_configuration(self, tokio_runtime.handle().clone())?;
+
+		command.init(&Self::support_url(), &Self::impl_version(), |_, _| {}, &config)?;
+		Runner::new(config, tokio_runtime)
 	}
 
+	/// Create a runner for the command provided in argument. The `logger_hook` can be used to setup
+	/// a custom profiler or update the logger configuration before it is initialized.
+	///
+	/// Example:
+	/// ```
+	/// use sc_tracing::{SpanDatum, TraceEvent};
+	/// struct TestProfiler;
+	///
+	/// impl sc_tracing::TraceHandler for TestProfiler {
+	///  	fn handle_span(&self, sd: &SpanDatum) {}
+	/// 		fn handle_event(&self, _event: &TraceEvent) {}
+	/// };
+	///
+	/// fn logger_hook() -> impl FnOnce(&mut sc_cli::LoggerBuilder, &sc_service::Configuration) -> () {
+	/// 	|logger_builder, config| {
+	/// 			logger_builder.with_custom_profiling(Box::new(TestProfiler{}));
+	/// 	}
+	/// }
+	/// ```
+	fn create_runner_with_logger_hook<T: CliConfiguration, F>(
+		&self,
+		command: &T,
+		logger_hook: F,
+	) -> error::Result<Runner<Self>>
+	where
+		F: FnOnce(&mut LoggerBuilder, &Configuration),
+	{
+		let tokio_runtime = build_runtime()?;
+		let config = command.create_configuration(self, tokio_runtime.handle().clone())?;
+
+		command.init(&Self::support_url(), &Self::impl_version(), logger_hook, &config)?;
+		Runner::new(config, tokio_runtime)
+	}
 	/// Native runtime version.
 	fn native_runtime_version(chain_spec: &Box<dyn ChainSpec>) -> &'static RuntimeVersion;
-}
-
-/// Initialize the logger
-pub fn init_logger(pattern: &str) {
-	use ansi_term::Colour;
-
-	let mut builder = env_logger::Builder::new();
-	// Disable info logging by default for some modules:
-	builder.filter(Some("ws"), log::LevelFilter::Off);
-	builder.filter(Some("yamux"), log::LevelFilter::Off);
-	builder.filter(Some("cranelift_codegen"), log::LevelFilter::Off);
-	builder.filter(Some("hyper"), log::LevelFilter::Warn);
-	builder.filter(Some("cranelift_wasm"), log::LevelFilter::Warn);
-	// Always log the special target `sc_tracing`, overrides global level
-	builder.filter(Some("sc_tracing"), log::LevelFilter::Trace);
-	// Enable info for others.
-	builder.filter(None, log::LevelFilter::Info);
-
-	if let Ok(lvl) = std::env::var("RUST_LOG") {
-		builder.parse_filters(&lvl);
-	}
-
-	builder.parse_filters(pattern);
-	let isatty = atty::is(atty::Stream::Stderr);
-	let enable_color = isatty;
-
-	builder.format(move |buf, record| {
-		let now = time::now();
-		let timestamp =
-			time::strftime("%Y-%m-%d %H:%M:%S", &now).expect("Error formatting log timestamp");
-
-		let mut output = if log::max_level() <= log::LevelFilter::Info {
-			format!(
-				"{} {}",
-				Colour::Black.bold().paint(timestamp),
-				record.args(),
-			)
-		} else {
-			let name = ::std::thread::current()
-				.name()
-				.map_or_else(Default::default, |x| {
-					format!("{}", Colour::Blue.bold().paint(x))
-				});
-			let millis = (now.tm_nsec as f32 / 1000000.0).floor() as usize;
-			let timestamp = format!("{}.{:03}", timestamp, millis);
-			format!(
-				"{} {} {} {}  {}",
-				Colour::Black.bold().paint(timestamp),
-				name,
-				record.level(),
-				record.target(),
-				record.args()
-			)
-		};
-
-		if !isatty && record.level() <= log::Level::Info && atty::is(atty::Stream::Stdout) {
-			// duplicate INFO/WARN output to console
-			println!("{}", output);
-		}
-
-		if !enable_color {
-			output = kill_color(output.as_ref());
-		}
-
-		writeln!(buf, "{}", output)
-	});
-
-	if builder.try_init().is_err() {
-		info!("💬 Not registering Substrate logger, as there is already a global logger registered!");
-	}
-}
-
-fn kill_color(s: &str) -> String {
-	lazy_static! {
-		static ref RE: Regex = Regex::new("\x1b\\[[^m]+m").expect("Error initializing color regex");
-	}
-	RE.replace_all(s, "").to_string()
 }

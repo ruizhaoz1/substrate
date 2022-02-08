@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2022 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -18,9 +18,9 @@
 
 //! Substrate system API helpers.
 
+use sc_chain_spec::{ChainType, Properties};
+use serde::{Deserialize, Serialize};
 use std::fmt;
-use serde::{Serialize, Deserialize};
-use sp_chain_spec::{Properties, ChainType};
 
 /// Running node's static details.
 #[derive(Clone, Debug)]
@@ -53,9 +53,7 @@ pub struct Health {
 
 impl fmt::Display for Health {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		write!(fmt, "{} peers ({})", self.peers, if self.is_syncing {
-			"syncing"
-		} else { "idle" })
+		write!(fmt, "{} peers ({})", self.peers, if self.is_syncing { "syncing" } else { "idle" })
 	}
 }
 
@@ -67,8 +65,6 @@ pub struct PeerInfo<Hash, Number> {
 	pub peer_id: String,
 	/// Roles
 	pub roles: String,
-	/// Protocol version
-	pub protocol_version: u32,
 	/// Peer best block hash
 	pub best_hash: Hash,
 	/// Peer best block number
@@ -84,10 +80,20 @@ pub enum NodeRole {
 	LightClient,
 	/// The node is an authority
 	Authority,
-	/// The node is a sentry
-	Sentry,
 }
 
+/// The state of the syncing of the node.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncState<Number> {
+	/// Height of the block at which syncing started.
+	pub starting_block: Number,
+	/// Height of the current best block of the node.
+	pub current_block: Number,
+	/// Height of the highest block learned from the network. Missing if no block is known yet.
+	#[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
+	pub highest_block: Option<Number>,
+}
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -99,7 +105,8 @@ mod tests {
 				peers: 1,
 				is_syncing: false,
 				should_have_peers: true,
-			}).unwrap(),
+			})
+			.unwrap(),
 			r#"{"peers":1,"isSyncing":false,"shouldHavePeers":true}"#,
 		);
 	}
@@ -110,11 +117,34 @@ mod tests {
 			::serde_json::to_string(&PeerInfo {
 				peer_id: "2".into(),
 				roles: "a".into(),
-				protocol_version: 2,
 				best_hash: 5u32,
 				best_number: 6u32,
-			}).unwrap(),
-			r#"{"peerId":"2","roles":"a","protocolVersion":2,"bestHash":5,"bestNumber":6}"#,
+			})
+			.unwrap(),
+			r#"{"peerId":"2","roles":"a","bestHash":5,"bestNumber":6}"#,
+		);
+	}
+
+	#[test]
+	fn should_serialize_sync_state() {
+		assert_eq!(
+			::serde_json::to_string(&SyncState {
+				starting_block: 12u32,
+				current_block: 50u32,
+				highest_block: Some(128u32),
+			})
+			.unwrap(),
+			r#"{"startingBlock":12,"currentBlock":50,"highestBlock":128}"#,
+		);
+
+		assert_eq!(
+			::serde_json::to_string(&SyncState {
+				starting_block: 12u32,
+				current_block: 50u32,
+				highest_block: None,
+			})
+			.unwrap(),
+			r#"{"startingBlock":12,"currentBlock":50}"#,
 		);
 	}
 }

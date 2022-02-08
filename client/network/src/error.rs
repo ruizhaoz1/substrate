@@ -1,6 +1,6 @@
 // This file is part of Substrate.
 
-// Copyright (C) 2017-2020 Parity Technologies (UK) Ltd.
+// Copyright (C) 2017-2022 Parity Technologies (UK) Ltd.
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 
 // This program is free software: you can redistribute it and/or modify
@@ -19,26 +19,26 @@
 //! Substrate network possible errors.
 
 use crate::config::TransportConfig;
-use libp2p::{PeerId, Multiaddr};
+use libp2p::{Multiaddr, PeerId};
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 /// Result type alias for the network.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Error type for the network.
-#[derive(derive_more::Display, derive_more::From)]
+#[derive(thiserror::Error)]
 pub enum Error {
 	/// Io error
-	Io(std::io::Error),
+	#[error(transparent)]
+	Io(#[from] std::io::Error),
+
 	/// Client error
-	Client(Box<sp_blockchain::Error>),
+	#[error(transparent)]
+	Client(#[from] Box<sp_blockchain::Error>),
 	/// The same bootnode (based on address) is registered with two different peer ids.
-	#[display(
-		fmt = "The same bootnode (`{}`) is registered with two different peer ids: `{}` and `{}`",
-		address,
-		first_id,
-		second_id,
+	#[error(
+		"The same bootnode (`{address}`) is registered with two different peer ids: `{first_id}` and `{second_id}`"
 	)]
 	DuplicateBootnode {
 		/// The address of the bootnode.
@@ -49,11 +49,11 @@ pub enum Error {
 		second_id: PeerId,
 	},
 	/// Prometheus metrics error.
-	Prometheus(prometheus_endpoint::PrometheusError),
+	#[error(transparent)]
+	Prometheus(#[from] prometheus_endpoint::PrometheusError),
 	/// The network addresses are invalid because they don't match the transport.
-	#[display(
-		fmt = "The following addresses are invalid because they don't match the transport: {:?}",
-		addresses,
+	#[error(
+		"The following addresses are invalid because they don't match the transport: {addresses:?}"
 	)]
 	AddressesForAnotherTransport {
 		/// Transport used.
@@ -61,23 +61,17 @@ pub enum Error {
 		/// The invalid addresses.
 		addresses: Vec<Multiaddr>,
 	},
+	/// The same request-response protocol has been registered multiple times.
+	#[error("Request-response protocol registered multiple times: {protocol}")]
+	DuplicateRequestResponseProtocol {
+		/// Name of the protocol registered multiple times.
+		protocol: Cow<'static, str>,
+	},
 }
 
 // Make `Debug` use the `Display` implementation.
 impl fmt::Debug for Error {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		fmt::Display::fmt(self, f)
-	}
-}
-
-impl std::error::Error for Error {
-	fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-		match self {
-			Error::Io(ref err) => Some(err),
-			Error::Client(ref err) => Some(err),
-			Error::DuplicateBootnode { .. } => None,
-			Error::Prometheus(ref err) => Some(err),
-			Error::AddressesForAnotherTransport { .. } => None,
-		}
 	}
 }
